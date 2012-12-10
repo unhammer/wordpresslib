@@ -417,7 +417,7 @@ class Progress(object):
 		pct = (self._seen / total) * 100.0
 
 		if pct > self._last_pct:
-			print '%s %.2f done' % (self._name, pct)
+			print '%s %.2f \% done' % (self._name, pct)
 			self._last_pct = pct
 		# If size is very small and total is big, pct
 		# stays the same, so don't update
