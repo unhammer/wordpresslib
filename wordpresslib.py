@@ -1,3 +1,5 @@
+#/usr/bin/env python
+# -*- indent-tabs-mode: t; tab-width: 8 -*-
 """
 	wordpresslib.py
 	
@@ -56,6 +58,7 @@ import xmlrpclib
 import datetime
 import time
 import mimetypes
+import StringIO
 
 class WordPressException(exceptions.Exception):
 	"""Custom exception for WordPress client operations
@@ -131,7 +134,7 @@ class WordPressClient:
 		self.password = password
 		self.blogId = 0
 		self.categories = None
-		self._server = xmlrpclib.ServerProxy(self.url)
+		self._server = ServerProxyProgress(self.url)
 
 	def _filterPost(self, post):
 		"""Transform post struct in WordPressPost instance 
@@ -384,11 +387,143 @@ class WordPressClient:
 				'type' : mimetype,
 				'bits' : xmlrpclib.Binary(mediaBits)
 			}
-			
+
+			self._server.__callback = Progress().update
+			self._server.__cb_args = mediaFileName
 			result = self._server.metaWeblog.newMediaObject(self.blogId, 
 									self.user, self.password, mediaStruct)
+			self._server.__callback = None
+			self._server.__cb_args = None
+
 			return result['url']
 			
 		except xmlrpclib.Fault, fault:
 			raise WordPressException(fault)
+
+
+
+class Progress(object):
+	def __init__(self):
+		self._seen = 0.0
+		self._last_pct = 0.0
+
+	def update(self, total, size, name=''):
+		self._seen += size
+		pct = (self._seen / total) * 100.0
+
+		if self._last_pct == pct:
+			# If size is very small and total is big, pct
+			# stays the same, so don't update
+			return
+		else:
+			self._last_pct = pct
+
+		if name:
+			print '%s progress: %.2f' % (name, pct)
+		else:
+			print 'Progress: %.2f' % (pct)
+
+
+class StringIOCallback(StringIO.StringIO):
+	"""The callback function should take at least two variable
+	arguments: total length, then length of the current read
+	operation. Any fixed arguments should be supplied when creating
+	the object. """
+	# Based on http://stackoverflow.com/a/5928451
+
+	def __init__(self, buf, callback, *cb_args):
+		StringIO.StringIO.__init__(self, buf)
+		self._callback = callback
+		self._cb_args = cb_args
+
+	def __len__(self):
+		return self.len
+
+	def read(self, size):
+		data = StringIO.StringIO.read(self, size)
+		self._callback(self.len, len(data), *self._cb_args)
+		return data
+
+
+class ServerProxyProgress():
+	# Copy-pasted from xmlrpclib. I would rather have subclassed,
+	# but then I keep getting endless recursion between
+	# xmlrpclib._Method.__call__, ServerProxyProgress.__request
+	# and xmlrpclib.dumps
+	def __init__(self, uri, transport=None, encoding=None, verbose=0,
+		     allow_none=0, use_datetime=0, callback=None, cb_args=None):
+		# establish a "logical" server connection
+		
+		if isinstance(uri, unicode):
+			uri = uri.encode('ISO-8859-1')
+				
+		# get the url
+		import urllib
+		type, uri = urllib.splittype(uri)
+		if type not in ("http", "https"):
+			raise IOError, "unsupported XML-RPC protocol"
+		self.__host, self.__handler = urllib.splithost(uri)
+		if not self.__handler:
+			self.__handler = "/RPC2"
+
+		if transport is None:
+			if type == "https":
+				transport = xmlrpclib.SafeTransport(use_datetime=use_datetime)
+			else:
+				transport = xmlrpclib.Transport(use_datetime=use_datetime)
+		self.__transport = transport
+
+		self.__encoding = encoding
+		self.__verbose = verbose
+		self.__allow_none = allow_none
+		self.__callback = callback
+		self.__cb_args = cb_args
+
+	def __close(self):
+		self.__transport.close()
+
+	def __request(self, methodname, params):
+		# call a method on the remote server
+
+		request = xmlrpclib.dumps(params, methodname, encoding=self.__encoding,
+					  allow_none=self.__allow_none)
+
+		if self.__callback:
+			request = StringIOCallback(request, self.__callback, self.__cb_args)
+
+		response = self.__transport.request(
+			self.__host,
+			self.__handler,
+			request,
+			verbose=self.__verbose
+			)
+
+		if len(response) == 1:
+			response = response[0]
+
+		return response
+
+	def __repr__(self):
+		return (
+			"<ServerProxyProgress for %s%s>" %
+			(self.__host, self.__handler)
+			)
+
+	__str__ = __repr__
+
+	def __getattr__(self, name):
+		# magic method dispatcher
+		return xmlrpclib._Method(self.__request, name)
 	
+	 # note: to call a remote object with an non-standard name, use
+	 # result getattr(server, "strange-python-name")(args)
+
+	def __call__(self, attr):
+		"""A workaround to get special attributes on the ServerProxy
+		without interfering with the magic __getattr__
+		"""
+		if attr == "close":
+			return self.__close
+		elif attr == "transport":
+			return self.__transport
+		raise AttributeError("Attribute %r not found" % (attr,))
