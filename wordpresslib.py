@@ -135,10 +135,13 @@ class WordPressClient:
 		self.blogId = 0
 		self.categories = None
 		self._progress_update_fn = None
-		self._server = ServerProxyCB(self.url,
-					     callback=self._progress_update_cb)
+		self._server = ServerProxyProgress(self.url,
+						   callback=self._progress_update_wrapper)
 		
-	def _progress_update_cb(self, *args):
+	def _progress_update_wrapper(self, *args):
+		# This wrapper, sent to ServerProxyProgress, is
+		# necessary so we can switch progress update functions
+		# in between xmlrcp requests
 		if self._progress_update_fn:
 			self._progress_update_fn(*args)
 
@@ -375,7 +378,7 @@ class WordPressClient:
 		except xmlrpclib.Fault, fault:
 			raise WordPressException(fault)
 			
-	def newMediaObject(self, mediaFileName):
+	def newMediaObject(self, mediaFileName, progress_callback=None):
 		"""Add new media object (image, movie, etc...)
 		"""
 		try:
@@ -394,7 +397,7 @@ class WordPressClient:
 				'bits' : xmlrpclib.Binary(mediaBits)
 			}
 
-			self._progress_update_fn = Progress(mediaFileName).update
+			self._progress_update_fn = progress_callback
 			result = self._server.metaWeblog.newMediaObject(self.blogId, 
 									self.user, self.password, mediaStruct)
 			self._progress_update_fn = None
@@ -406,7 +409,7 @@ class WordPressClient:
 
 
 
-class Progress(object):
+class SimpleProgress(object):
 	def __init__(self, name):
 		self._seen = 0.0
 		self._last_pct = 0.0
@@ -441,10 +444,10 @@ class StringIOCallback(StringIO.StringIO):
 		return data
 
 
-class ServerProxyCB():
+class ServerProxyProgress():
 	# Copy-pasted from xmlrpclib. I would rather have subclassed,
 	# but then I keep getting endless recursion between
-	# xmlrpclib._Method.__call__, ServerProxyCB.__request
+	# xmlrpclib._Method.__call__, ServerProxyProgress.__request
 	# and xmlrpclib.dumps
 	def __init__(self, uri, transport=None, encoding=None, verbose=0,
 		     allow_none=0, use_datetime=0, callback=None):
@@ -499,7 +502,7 @@ class ServerProxyCB():
 
 	def __repr__(self):
 		return (
-			"<ServerProxyCB for %s%s>" %
+			"<ServerProxyProgress for %s%s>" %
 			(self.__host, self.__handler)
 			)
 
