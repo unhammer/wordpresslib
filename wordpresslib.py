@@ -134,7 +134,13 @@ class WordPressClient:
 		self.password = password
 		self.blogId = 0
 		self.categories = None
-		self._server = ServerProxyProgress(self.url)
+		self._progress_update_fn = None
+		self._server = ServerProxyCB(self.url,
+					     callback=self._progress_update_cb)
+		
+	def _progress_update_cb(self, *args):
+		if self._progress_update_fn:
+			self._progress_update_fn(*args)
 
 	def _filterPost(self, post):
 		"""Transform post struct in WordPressPost instance 
@@ -378,7 +384,7 @@ class WordPressClient:
 			f.close()
 
 			mimetype = 'unknown/unknown'
-			mimeguess = mimetypes.guess_type(f)
+			mimeguess = mimetypes.guess_type(mediaFileName)
 			if mimeguess and mimeguess[0]:
 				mimetype = mimeguess[0]
 
@@ -388,12 +394,10 @@ class WordPressClient:
 				'bits' : xmlrpclib.Binary(mediaBits)
 			}
 
-			self._server.__callback = Progress().update
-			self._server.__cb_args = mediaFileName
+			self._progress_update_fn = Progress(mediaFileName).update
 			result = self._server.metaWeblog.newMediaObject(self.blogId, 
 									self.user, self.password, mediaStruct)
-			self._server.__callback = None
-			self._server.__cb_args = None
+			self._progress_update_fn = None
 
 			return result['url']
 			
@@ -403,55 +407,47 @@ class WordPressClient:
 
 
 class Progress(object):
-	def __init__(self):
+	def __init__(self, name):
 		self._seen = 0.0
 		self._last_pct = 0.0
+		self._name = name
 
-	def update(self, total, size, name=''):
+	def update(self, total, size):
 		self._seen += size
 		pct = (self._seen / total) * 100.0
 
-		if self._last_pct == pct:
-			# If size is very small and total is big, pct
-			# stays the same, so don't update
-			return
-		else:
+		if pct > self._last_pct:
+			print '%s %.2f done' % (self._name, pct)
 			self._last_pct = pct
-
-		if name:
-			print '%s progress: %.2f' % (name, pct)
-		else:
-			print 'Progress: %.2f' % (pct)
+		# If size is very small and total is big, pct
+		# stays the same, so don't update
 
 
 class StringIOCallback(StringIO.StringIO):
-	"""The callback function should take at least two variable
-	arguments: total length, then length of the current read
-	operation. Any fixed arguments should be supplied when creating
-	the object. """
+	"""The callback function should take two variable arguments:
+	total length, then length of the current read operation."""
 	# Based on http://stackoverflow.com/a/5928451
 
-	def __init__(self, buf, callback, *cb_args):
+	def __init__(self, buf, callback):
 		StringIO.StringIO.__init__(self, buf)
 		self._callback = callback
-		self._cb_args = cb_args
 
 	def __len__(self):
 		return self.len
 
 	def read(self, size):
 		data = StringIO.StringIO.read(self, size)
-		self._callback(self.len, len(data), *self._cb_args)
+		self._callback(self.len, len(data))
 		return data
 
 
-class ServerProxyProgress():
+class ServerProxyCB():
 	# Copy-pasted from xmlrpclib. I would rather have subclassed,
 	# but then I keep getting endless recursion between
-	# xmlrpclib._Method.__call__, ServerProxyProgress.__request
+	# xmlrpclib._Method.__call__, ServerProxyCB.__request
 	# and xmlrpclib.dumps
 	def __init__(self, uri, transport=None, encoding=None, verbose=0,
-		     allow_none=0, use_datetime=0, callback=None, cb_args=None):
+		     allow_none=0, use_datetime=0, callback=None):
 		# establish a "logical" server connection
 		
 		if isinstance(uri, unicode):
@@ -477,19 +473,17 @@ class ServerProxyProgress():
 		self.__verbose = verbose
 		self.__allow_none = allow_none
 		self.__callback = callback
-		self.__cb_args = cb_args
 
 	def __close(self):
 		self.__transport.close()
 
 	def __request(self, methodname, params):
 		# call a method on the remote server
-
 		request = xmlrpclib.dumps(params, methodname, encoding=self.__encoding,
 					  allow_none=self.__allow_none)
 
 		if self.__callback:
-			request = StringIOCallback(request, self.__callback, self.__cb_args)
+			request = StringIOCallback(request, self.__callback)
 
 		response = self.__transport.request(
 			self.__host,
@@ -505,7 +499,7 @@ class ServerProxyProgress():
 
 	def __repr__(self):
 		return (
-			"<ServerProxyProgress for %s%s>" %
+			"<ServerProxyCB for %s%s>" %
 			(self.__host, self.__handler)
 			)
 
